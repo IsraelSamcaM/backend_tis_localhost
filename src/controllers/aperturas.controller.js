@@ -24,7 +24,7 @@ export const getAperturas = async (req, res) => {
 export const getAperturasTabla = async (req, res) => {
     try {
         const aperturas = await Apertura.findAll({
-            order: [['id_apertura', 'DESC']],
+            order: [['apertura_inicio', 'DESC']],
         });
 
         const aperturasFormateadas = aperturas.map(apertura => {
