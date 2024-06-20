@@ -2,10 +2,11 @@ import { Reserva } from '../models/Reserva.js';
 import { Ambiente } from '../models/Ambiente.js';
 import { Disponible } from '../models/Disponible.js';
 import { Periodo } from '../models/Periodo.js';
+import { Grupo } from '../models/Grupo.js';
+import { Materia } from '../models/Materia.js';
 import { Auxiliar_reserva } from '../models/Auxiliar_reserva.js';
 import { Usuario } from '../models/Usuario.js';
 import { Aux_grupo } from '../models/Aux_grupos.js';
-
 import { sequelize } from "../database/database.js"
 import { Model } from 'sequelize';
 import { Op } from 'sequelize';
@@ -273,6 +274,7 @@ export const getListaReservas = async (req, res) => {
         const combinedResult = result.reduce((acc, current) => {
             const existingItem = acc.find(item => item.id_reserva === current.id_reserva);
             if (existingItem) {
+                existingItem.nombre_usuario += `, ${current.nombre_usuario}`;
                 existingItem.nombre_materia += `, ${current.nombre_materia}`;
                 existingItem.nombre_grupo += `, ${current.nombre_grupo}`;
                 existingItem.cantidad_sumada += current.cantidad_sumada;
@@ -355,54 +357,7 @@ export const getListaReservasUsuario = async (req, res) => {
     }
 };
 
-export const reporteDocentes = async (req, res) => {
-    try {
-        let { fecha_inicio, fecha_fin } = req.body;
 
-        const fechaInicio = new Date(fecha_inicio);
-        const fechaFin = new Date(fecha_fin);
-
-        fechaFin.setDate(fechaFin.getDate() + 1);
-
-        const docentes = await Usuario.findAll({
-            attributes: [
-                'nombre_usuario',
-                'tipo_usuario',
-                'codsiss',
-                [sequelize.fn('COUNT', sequelize.col('aux_grupos->auxiliar_reservas->reserva.id_reserva')), 'cantidad_reservas']
-            ],
-            include: [{
-                model: Aux_grupo,
-                attributes: [],
-                include: [{
-                    model: Auxiliar_reserva,
-                    attributes: [],
-                    include: [{
-                        model: Reserva,
-                        attributes: [],
-                        where: {
-                            estado: 'vigente',
-                            fecha_reserva: {
-                                [Op.between]: [fechaInicio, fechaFin]
-                            }
-                        }
-                    }]
-                }]
-            }],
-            group: ['usuarios.id_usuario'],
-            order: [[sequelize.literal('cantidad_reservas'), 'DESC']],
-            raw: true
-        });
-
-        const docentesFiltrados = docentes.filter(docente => docente.cantidad_reservas > 0);
-        const top = docentesFiltrados.slice(0, 10);
-
-        res.json(top);
-    } catch (error) {
-        console.error('Error al obtener el reporte de docentes:', error);
-        return res.status(500).json({ message: 'Error interno del servidor' });
-    }
-}
 
 export const getReservasAmbiente = async (req, res) => {
     try {
@@ -444,3 +399,155 @@ export const getReservasAmbiente = async (req, res) => {
         return res.status(500).json({ message: error.message });
     }
 };
+
+
+async function auxReporte(fechaInicio, fechaFin) {
+    const reservas = await Reserva.findAll({
+        where: {
+            fecha_reserva: {
+                [Op.between]: [fechaInicio, fechaFin]
+            }
+        },
+        include: [
+            {
+                model: Disponible,
+                include: [
+                    {
+                        model: Periodo,
+                        attributes: ['hora_inicio', 'hora_fin']
+                    },{
+                        model:Ambiente, 
+                        attributes:[ 'nombre_ambiente','capacidad','porcentaje_min', 'porcentaje_max']
+                    }
+                ]
+            },
+            {
+                model: Auxiliar_reserva,
+                include: [
+                    {
+                        model: Aux_grupo,
+                        include: [
+                            {
+                                model: Usuario,
+                                attributes: ['id_usuario','nombre_usuario','tipo_usuario', 'codsiss']
+                            },{
+                                model: Grupo,
+                                attributes: ['nombre_grupo', 'cantidad_est'],
+                                include: [
+                                    {
+                                        model: Materia,
+                                        attributes: ['nombre_materia'],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+        raw: true
+    });
+    //console.log(reservas);
+
+    return reservas;
+}
+
+export const getReservasReporte = async (req, res) => {
+    try {
+        let { fecha_inicio, fecha_fin } = req.body;
+
+        const fechaInicio = new Date(fecha_inicio);
+        const fechaFin = new Date(fecha_fin);
+
+        fechaFin.setDate(fechaFin.getDate() + 1);
+        
+        const reservas = await auxReporte(fechaInicio, fechaFin)
+        //console.log(reservas)
+
+        const mappedReservas = reservas.map((reserva, index) => {
+            const solicitante = reserva['auxiliar_reservas.aux_grupo.usuario.nombre_usuario'];
+            const registro = fechaFormateada(reserva.registro_reserva);
+            const fecha = new Date(reserva.fecha_reserva).toLocaleDateString('es-ES');
+            const horario_inicio = reserva['disponible.periodo.hora_inicio'];
+            const horario_fin=reserva['disponible.periodo.hora_fin'];
+            const materiaGrupo = reserva['auxiliar_reservas.aux_grupo.grupo.materia.nombre_materia'] + ' - ' + reserva['auxiliar_reservas.aux_grupo.grupo.nombre_grupo'];
+            const cantidad = reserva.cantidad_total;
+            const ambiente = reserva['disponible.ambiente.nombre_ambiente'];
+            const minCapacidadMax = Math.floor(reserva['disponible.ambiente.capacidad'] * (reserva['disponible.ambiente.porcentaje_min'] / 100.0))+' - ' +reserva['disponible.ambiente.capacidad']+' - '+Math.floor(reserva['disponible.ambiente.capacidad'] * (reserva['disponible.ambiente.porcentaje_max'] / 100.0)); 
+            const estado = reserva.estado;
+
+            return {
+                'nombre_usuario': solicitante,
+                'registro_reserva': registro,
+                'fecha_reserva': fecha,
+                'hora_inicio': horario_inicio,
+                'hora_fin': horario_fin,
+                'Materia - Grupo': materiaGrupo,
+                'cantidad_est': cantidad,
+                'nombre_ambiente': ambiente,
+                'min_cap_max': minCapacidadMax,
+                //Estado: estado
+            };
+        });
+        
+        //console.log(reservas);
+
+        res.json(mappedReservas);
+    } catch (error) {
+        return res.status(500).json({ message: error.message });
+    }
+}
+
+export const reporteDocentes = async (req, res) => {
+    try {
+        let { fecha_inicio, fecha_fin } = req.body;
+
+        const fechaInicio = new Date(fecha_inicio);
+        const fechaFin = new Date(fecha_fin);
+
+        fechaFin.setDate(fechaFin.getDate() + 1);
+        const reservas = await auxReporte(fechaInicio, fechaFin);
+
+        // Crear un mapa para contar las reservas por nombre de usuario
+        const reservasMap = new Map();
+
+        reservas.forEach((reserva) => {
+            const nombreUsuario = reserva['auxiliar_reservas.aux_grupo.usuario.nombre_usuario'];
+            const codSissUsuario = reserva['auxiliar_reservas.aux_grupo.usuario.codsiss'];
+            const tipoUsuario = reserva['auxiliar_reservas.aux_grupo.usuario.tipo_usuario'];
+
+            if (!reservasMap.has(nombreUsuario)) {
+                reservasMap.set(nombreUsuario, {
+                    cantidadReservas: 0,
+                    codSissUsuario: codSissUsuario,
+                    tipoUsuario: tipoUsuario
+                });
+            }
+            reservasMap.get(nombreUsuario).cantidadReservas += 1;
+        });
+
+        // Convertir el mapa en un array con el formato deseado
+        let resultado = [];
+
+        reservasMap.forEach((value, nombreUsuario) => {
+            resultado.push({
+                nombre_usuario: nombreUsuario,
+                tipo_usuario: value.tipoUsuario,
+                codsiss: value.codSissUsuario,
+                cantidad_reservas: value.cantidadReservas.toString()
+            });
+        });
+
+        // Ordenar los resultados por cantidad de reservas en orden descendente y tomar los primeros 5
+        resultado.sort((a, b) => b.cantidad_reservas - a.cantidad_reservas);
+        resultado = resultado.slice(0, 10);
+
+        res.json(resultado);
+
+    } catch (error) {
+        console.error('Error al obtener el reporte de docentes:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    }
+};
+
+

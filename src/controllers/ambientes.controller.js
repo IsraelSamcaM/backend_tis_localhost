@@ -397,7 +397,7 @@ export const reporteAmbientes = async (req, res) => {
                     model: Reserva,
                     attributes: [],
                     where: {
-                        estado: 'vigente',
+                        //estado: 'vigente',
                         fecha_reserva: {
                             [Op.between]: [fechaInicio, fechaFin]
                         }
