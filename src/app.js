@@ -22,8 +22,6 @@ import aperturasRoutes from "./routes/aperturas.routes.js";
 import reservasRoutes from "./routes/reservas.routes.js";
 import notificacionesRoutes from "./routes/notificaciones.routes.js";
 
-// Middlewares
-
 app.use(express.json());
 
 app.use(cors());
